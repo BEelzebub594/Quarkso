@@ -65,6 +65,7 @@ class Quarkso(PluginBase):
             self.price = config.get("price", 0)
             self.admin_ignore = config.get("admin_ignore", False)
             self.whitelist_ignore = config.get("whitelist_ignore", False)
+            self.default_type = config.get("default_type", "QUARK")  # 新增默认资源类型配置
             
             try:
                 self.db = XYBotDB()
@@ -114,6 +115,17 @@ class Quarkso(PluginBase):
             # 去掉开头的命令字符
             processed_content = content[len(matched_command):].strip()
             
+            # 确定搜索类型
+            search_type = "QUARK"  # 默认夸克
+            if "百度云搜索" in matched_command:
+                search_type = "BDY"
+            elif "夸克搜索" in matched_command:
+                search_type = "QUARK"
+            else:
+                search_type = self.default_type
+                
+            logger.info(f"[Quarkso] 搜索类型: {search_type}")
+            
             # 如果 processed_content 为空，直接 return
             if not processed_content:
                 await bot.send_at_message(message["FromWxid"], f"\n{self.command_format}", [message["SenderWxid"]])
@@ -121,8 +133,8 @@ class Quarkso(PluginBase):
             
             if await self._check_point(bot, message):
                 await bot.send_text_message(message["FromWxid"], f"正在搜索，请稍等...", [message["SenderWxid"]])
-                response_data = self.merge_qry_data(processed_content)
-                await self.send_final_reply(bot, message, response_data)
+                response_data = self.merge_qry_data(processed_content, search_type)
+                await self.send_final_reply(bot, message, response_data, search_type)
         except Exception as e:
             logger.error(f"[Quarkso] 处理消息异常: {e}")
             try:
@@ -130,9 +142,11 @@ class Quarkso(PluginBase):
             except Exception as send_err:
                 logger.error(f"[Quarkso] 发送错误消息失败: {send_err}")
 
-    async def send_final_reply(self, bot: WechatAPIClient, message: dict, response_text: str):
+    async def send_final_reply(self, bot: WechatAPIClient, message: dict, response_text: str, search_type="QUARK"):
         try:
-            if not response_text or response_text == '【' + message["Content"].strip() + '】外部资源搜索结果：\n':
+            search_type_text = "百度云" if search_type == "BDY" else "夸克"
+            
+            if not response_text or response_text == f'【{message["Content"].strip()}】{search_type_text}资源搜索结果：\n':
                 reply_text_final = f"未找到，可换个关键词尝试哦~"
                 reply_text_final += "\n⚠️宁少写，不多写、错写~"
 
@@ -157,28 +171,43 @@ class Quarkso(PluginBase):
             except Exception as send_err:
                 logger.error(f"[Quarkso] 发送错误消息失败: {send_err}")
 
-    def merge_qry_data(self, qry_key: str):
+    def merge_qry_data(self, qry_key: str, search_type="QUARK"):
         try:
-            def fetch_data(method_name: str, qry_key: str) -> Any:
+            def fetch_data(method_name: str, qry_key: str, search_type="QUARK") -> Any:
                 try:
                     quark = QURAK()
                     method = getattr(quark, method_name, None)
                     if method is not None:
-                        return method(qry_key)
+                        # 如果是瓦力搜索方法，传入搜索类型参数
+                        if method_name in ["get_waliso_search", "get_qry_external_4"]:
+                            return method(qry_key, search_type)
+                        # 如果搜索百度云且有对应方法，使用百度云搜索方法
+                        elif search_type == "BDY" and method_name == "get_baidu_search":
+                            return method(qry_key)
+                        # 如果搜索夸克，使用夸克相关方法
+                        elif search_type == "QUARK":
+                            return method(qry_key)
+                        return None
                     return None
                 except Exception as e:
                     logger.error(f"[Quarkso] 执行方法 {method_name} 异常: {e}")
                     return None
 
-            logger.info(f'[Quarkso] 查询关键字: {qry_key}')
-            msg = f'【{qry_key}】夸克资源搜索结果：\n'
+            logger.info(f'[Quarkso] 查询关键字: {qry_key}, 搜索类型: {search_type}')
+            
+            search_type_text = "百度云" if search_type == "BDY" else "夸克"
+            msg = f'【{qry_key}】{search_type_text}资源搜索结果：\n'
             start_time = time.time()
 
             # 首先尝试使用瓦力搜索
             try:
-                logger.info(f'[Quarkso] 尝试使用瓦力搜索...')
+                logger.info(f'[Quarkso] 尝试使用瓦力搜索，类型: {search_type}...')
                 quark = QURAK()
-                waliso_results = quark.get_waliso_search(qry_key)
+                
+                if search_type == "BDY":
+                    waliso_results = quark.get_baidu_search(qry_key)
+                else:
+                    waliso_results = quark.get_waliso_search(qry_key)
                 
                 # 如果瓦力搜索找到了结果，直接返回
                 if waliso_results and len(waliso_results) > 0:
@@ -205,7 +234,14 @@ class Quarkso(PluginBase):
             except Exception as e:
                 logger.error(f'[Quarkso] 瓦力搜索异常: {e}')
             
-            # 如果瓦力搜索失败或未找到结果，尝试使用其他搜索源
+            # 百度云搜索只使用瓦力搜索，如果未找到结果则直接返回
+            if search_type == "BDY":
+                end_time = time.time()
+                execution_time = end_time - start_time
+                logger.info(f"[Quarkso] 百度云搜索耗时: {execution_time:.6f} seconds")
+                return msg
+            
+            # 如果是夸克搜索且瓦力搜索失败或未找到结果，尝试使用其他搜索源
             try:
                 with ThreadPoolExecutor() as executor:
                     futures = [

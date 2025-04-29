@@ -89,9 +89,10 @@ class QURAK:
             return False, str(e)
 
     # 新增瓦力搜索方法
-    def get_waliso_search(self, qry_key: str):
+    def get_waliso_search(self, qry_key: str, resource_type="QUARK"):
         """
         使用瓦力搜索API进行资源搜索
+        支持夸克网盘(QUARK)和百度云(BDY)
         """
         # 使用v1接口
         url = "https://waliso.com/v1/search/disk"
@@ -106,14 +107,14 @@ class QURAK:
             "format": [],
             "share_time": "",
             "size": 15,
-            "type": "QUARK",
+            "type": resource_type,
             "exclude_user": [],
             "adv_params": {"wechat_pwd": ""}
         }
         
         result_json = []
         try:
-            logger.info(f"[QURAK] 开始瓦力搜索: {qry_key}")
+            logger.info(f"[QURAK] 开始瓦力搜索: {qry_key}, 资源类型: {resource_type}")
             
             # 禁用SSL警告
             import urllib3
@@ -145,14 +146,23 @@ class QURAK:
                             title = item.get("disk_name", "未知标题").replace("<em>", "").replace("</em>", "")
                             url = item.get("link", "")
                             
-                            if not url or "quark" not in url:
+                            if not url:
                                 continue
                                 
                             # 验证资源有效性
-                            pwd_id, _ = self.get_id_from_url(url)
-                            is_sharing, _ = self.get_stoken(pwd_id)
-                            
-                            if is_sharing:
+                            if resource_type == "QUARK" and "quark" in url:
+                                pwd_id, _ = self.get_id_from_url(url)
+                                is_sharing, _ = self.get_stoken(pwd_id)
+                                
+                                if is_sharing:
+                                    item_dict = {
+                                        'title': title,
+                                        'url': url
+                                    }
+                                    result_json.append(item_dict)
+                                    i += 1
+                            # 百度云资源不做验证，直接返回
+                            elif resource_type == "BDY" and ("baidu" in url or "pan.baidu" in url):
                                 item_dict = {
                                     'title': title,
                                     'url': url
@@ -174,11 +184,18 @@ class QURAK:
         return result_json
         
     # 更新为使用新API的方法
-    def get_qry_external_4(self, qry_key: str):
+    def get_qry_external_4(self, qry_key: str, resource_type="QUARK"):
         """
-        使用waliso.com的新API搜索资源
+        使用waliso.com的新API搜索资源，支持夸克网盘和百度云
         """
-        return self.get_waliso_search(qry_key)
+        return self.get_waliso_search(qry_key, resource_type)
+
+    # 百度云搜索功能
+    def get_baidu_search(self, qry_key: str):
+        """
+        使用瓦力搜索API搜索百度云资源
+        """
+        return self.get_waliso_search(qry_key, "BDY")
 
     # 查询资源1
     def get_qry_external(self, qry_key: str):
